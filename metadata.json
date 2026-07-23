@@ -1,0 +1,6 @@
+{
+  "name": "Table Magic",
+  "description": "Conversor de Tabelas em PDF para Planilhas Excel com Junção em Abas (extração local, sem IA)",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

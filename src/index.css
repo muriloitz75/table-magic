@@ -9,27 +9,48 @@
 
 @layer base {
   body {
-    background-color: #0b0f17;
-    color: #f1f5f9;
     font-family: var(--font-sans);
     overflow-x: hidden;
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  body.dark, html.dark body {
+    background-color: #0b0f17;
+    color: #f1f5f9;
+  }
+
+  body.light, html.light body {
+    background-color: #f8fafc;
+    color: #0f172a;
   }
 }
 
 /* Custom Utilities for Studio Premium Glass & Micro-Glow */
-.obsidian-card {
-  background: rgba(17, 23, 35, 0.75);
+.dark .obsidian-card, .obsidian-card {
+  background: rgba(17, 23, 35, 0.8);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.light .obsidian-card {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(226, 232, 240, 0.9);
+  box-shadow: 0 10px 30px -5px rgba(0, 0, 0, 0.05);
+}
+
 .obsidian-card-hover {
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.obsidian-card-hover:hover {
+.dark .obsidian-card-hover:hover {
   border-color: rgba(16, 185, 129, 0.35);
   box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.18);
+}
+.light .obsidian-card-hover:hover {
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 10px 25px -5px rgba(16, 185, 129, 0.12);
 }
 
 .emerald-glow {
@@ -40,19 +61,26 @@
   box-shadow: 0 0 20px -3px rgba(245, 158, 11, 0.3);
 }
 
-/* Custom scrollbar for secondary PDF list */
+/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-::-webkit-scrollbar-track {
+.dark ::-webkit-scrollbar-track {
   background: rgba(11, 15, 23, 0.5);
 }
-::-webkit-scrollbar-thumb {
+.light ::-webkit-scrollbar-track {
+  background: rgba(241, 245, 249, 0.8);
+}
+.dark ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 9999px;
 }
+.light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.5);
 }
 

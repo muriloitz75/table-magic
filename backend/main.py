@@ -70,6 +70,7 @@ def convert(payload: ConvertRequest):
         file_results,
         hide_responsavel=payload.hideResponsavel,
         hide_secondary_tabs=payload.hideSecondaryTabs,
+        disable_principal_tab=payload.disablePrincipalTab,
     )
     b64_excel = base64.b64encode(xlsx_bytes).decode("ascii")
 

@@ -16,6 +16,8 @@ class ConvertRequest(BaseModel):
     hideResponsavel: bool = False
     # Quando True, oculta as abas secundárias (mantém apenas a principal visível).
     hideSecondaryTabs: bool = False
+    # Quando True, desabilita a aba principal tornando-a uma aba secundária como as demais.
+    disablePrincipalTab: bool = False
 
 
 class TableData(BaseModel):

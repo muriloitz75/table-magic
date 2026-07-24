@@ -774,6 +774,7 @@ def build_workbook(
     file_results: list[dict],
     hide_responsavel: bool = False,
     hide_secondary_tabs: bool = False,
+    disable_principal_tab: bool = False,
 ) -> tuple[bytes, list[dict]]:
     """file_results: lista de {fileName, tabName, tables, extractionMethod, warning}
     onde `tables` e uma lista de {tableName, headers, rows}. O primeiro arquivo e
@@ -814,8 +815,8 @@ def build_workbook(
         for key in {_proc_key(row[0]) for row in p["ordered"][0].get("rows", []) if row and _proc_key(row[0])}:
             proc_to_persons.setdefault(key, []).append(person)
 
-    # Injeta "Responsavel" na tabela principal, se houver responsaveis com dados
-    if proc_to_persons and prepared and prepared[0]["ordered"]:
+    # Injeta "Responsavel" na tabela principal, se houver responsaveis com dados e a aba principal nao estiver desabilitada
+    if not disable_principal_tab and proc_to_persons and prepared and prepared[0]["ordered"]:
         main_table = prepared[0]["ordered"][0]
         _inject_responsavel(main_table, proc_to_persons)
         if hide_responsavel:

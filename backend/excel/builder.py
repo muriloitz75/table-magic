@@ -376,100 +376,472 @@ def _write_kpi_strip(
         lcell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
 
-def _write_dynamic_panel(ws, *, group_col: int, start_col: int, block_start: int,
-                         first_data_row: int, last_filter_row: int, unique_count: int,
-                         header_short: str, data_font: Font, theme: dict) -> None:
-    """Desenha um painel de contabilizacao dinamica (cartao) a partir de `start_col`.
-    Colunas: S(+1) = grupo, S+2 = Qtd (com barras de dados), S+3 = %.
-    Sempre visivel; recalcula ao filtrar via SUBTOTAL sobre linhas visiveis."""
-    banner_color  = theme["banner"]
+def _write_dashboard_sheet(
+    ws,
+    main_table: dict,
+    data_sheet_name: str,
+    last_filter_row: int,
+    proc_to_persons: dict[str, list[str]] | None = None,
+    secondary_person_counts: dict[str, int] | None = None,
+    tab_color: str | None = None,
+) -> None:
+    """Desenha a aba executiva Dashboards com banner hero, cartoes de KPI e
+    tabelas de distribuicao por Tipo de Solicitacao, Situacao e Responsaveis."""
+    theme = _theme_for(tab_color)
+    banner_color   = theme["banner"]
+    accent_color   = theme["accent"]
     kpi_fill_color = theme["kpi_fill"]
     card_bdr_color = theme["card_bdr"]
     bar_hex        = theme["bar_color"]
     kpi_text_color = theme["kpi_text"]
-    card_side      = Side(style="thin", color=card_bdr_color)
+    zebra_color    = theme["zebra"]
+    group_fill_clr = theme["group_fill"]
 
-    type_col = start_col
-    qty_col = start_col + 2
-    pct_col = start_col + 3
-    TL = get_column_letter(type_col)
-    QL = get_column_letter(qty_col)
-    gcl = get_column_letter(group_col + 1)
+    _apply_sheet_chrome(ws, tab_color=tab_color)
 
-    data_a = f"$A${first_data_row}:$A${last_filter_row}"
-    data_g = f"${gcl}${first_data_row}:${gcl}${last_filter_row}"
-    visible = f"SUBTOTAL(3, OFFSET($A${first_data_row}, ROW({data_a})-ROW($A${first_data_row}), 0, 1))"
-    vis_total = f"SUBTOTAL(3, {data_a})"
+    headers = _unique_headers(main_table.get("headers") or [])
+    raw_rows = main_table.get("rows") or []
+    parsed_rows = [
+        [cell_value(row[i]) if i < len(row) else "" for i in range(len(headers))]
+        for row in raw_rows
+    ]
+    total_records = len(parsed_rows)
 
-    # 1. Cabecalho do cartao (cor tematica, contagem ao vivo)
-    ws.merge_cells(start_row=block_start, start_column=type_col, end_row=block_start, end_column=pct_col)
-    ttl = ws.cell(
-        row=block_start, column=type_col,
-        value=f'="Contabilização por {header_short}  —  " & TEXT({vis_total}, "#,##0") & " registros"',
+    group_col = _find_group_column(headers)
+    situacao_col = next(
+        (i for i, h in enumerate(headers) if "situa" in h.lower() and i != group_col), None
     )
-    ttl.font = Font(name=FONT_NAME, size=12, bold=True, color=WHITE)
-    ttl.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    ws.row_dimensions[block_start].height = 24
-    for c in range(type_col, pct_col + 1):
-        ws.cell(row=block_start, column=c).fill = PatternFill("solid", fgColor=banner_color)
+    resp_col = next((i for i, h in enumerate(headers) if h.strip().lower() == "responsável"), None)
 
-    # 2. Rotulos de coluna
-    label_row = block_start + 1
-    label_font = Font(name=FONT_NAME, size=9.5, bold=True, color=kpi_text_color)
-    label_border = Border(bottom=Side(style="thin", color=card_bdr_color))
-    for c in range(type_col, pct_col + 1):
-        lc = ws.cell(row=label_row, column=c)
-        lc.fill = PatternFill("solid", fgColor=kpi_fill_color)
-        lc.border = label_border
-    ws.merge_cells(start_row=label_row, start_column=type_col, end_row=label_row, end_column=type_col + 1)
-    hcell = ws.cell(row=label_row, column=type_col, value=header_short)
-    hcell.font = label_font
-    hcell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
-    for col, txt in ((qty_col, "Qtd"), (pct_col, "%")):
-        cell = ws.cell(row=label_row, column=col, value=txt)
-        cell.font = label_font
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+    # 1. Analisa listas de distribuicao
+    unique_tipos = []
+    if group_col is not None:
+        counts: dict[str, int] = {}
+        for r in parsed_rows:
+            val = str(r[group_col]).strip()
+            if val:
+                counts[val] = counts.get(val, 0) + 1
+        unique_tipos = [k for k, _ in sorted(counts.items(), key=lambda item: item[1], reverse=True)]
 
-    # 3. Lista dinamica (spill) + Qtd + %
-    spill_row = label_row + 1
-    spill_formula = (
-        f'=IFERROR(_xlfn.UNIQUE(_xlfn._xlws.FILTER({data_g}, '
-        f'({data_a}<>"") * {visible})), "")'
+    unique_sit = []
+    if situacao_col is not None:
+        s_counts: dict[str, int] = {}
+        for r in parsed_rows:
+            val = str(r[situacao_col]).strip()
+            if val:
+                s_counts[val] = s_counts.get(val, 0) + 1
+        unique_sit = [k for k, _ in sorted(s_counts.items(), key=lambda item: item[1], reverse=True)]
+
+    resp_list = []
+    if secondary_person_counts:
+        resp_list = [
+            (person, count)
+            for person, count in sorted(secondary_person_counts.items(), key=lambda x: x[1], reverse=True)
+        ]
+    elif resp_col is not None:
+        r_counts: dict[str, int] = {}
+        for r in parsed_rows:
+            v = str(r[resp_col]).strip()
+            if v:
+                for p in [x.strip() for x in v.split(",") if x.strip()]:
+                    r_counts[p] = r_counts.get(p, 0) + 1
+        resp_list = sorted(r_counts.items(), key=lambda x: x[1], reverse=True)
+
+    has_resp = bool(resp_list)
+    max_col_idx = 15 if has_resp else 10
+
+    # 2. Larguras de colunas
+    ws.column_dimensions["A"].width = 3   # margem esquerda
+    ws.column_dimensions["B"].width = 28  # Categoria
+    ws.column_dimensions["C"].width = 11  # Qtd
+    ws.column_dimensions["D"].width = 11  # % Total
+    ws.column_dimensions["E"].width = 20  # Barra
+    ws.column_dimensions["F"].width = 4   # divisor
+    ws.column_dimensions["G"].width = 24  # Situacao
+    ws.column_dimensions["H"].width = 11  # Qtd
+    ws.column_dimensions["I"].width = 11  # % Total
+    ws.column_dimensions["J"].width = 20  # Barra
+    if has_resp:
+        ws.column_dimensions["K"].width = 4   # divisor
+        ws.column_dimensions["L"].width = 26  # Responsavel
+        ws.column_dimensions["M"].width = 12  # Qtd
+        ws.column_dimensions["N"].width = 11  # % Total
+        ws.column_dimensions["O"].width = 20  # Barra
+
+    # 3. Banner Hero (Linhas 1-2)
+    ws.row_dimensions[1].height = 32
+    ws.row_dimensions[2].height = 20
+    ws.row_dimensions[3].height = 10  # respiro
+
+    banner_fill = PatternFill("solid", fgColor=banner_color)
+    for r in (1, 2):
+        for c in range(2, max_col_idx + 1):
+            ws.cell(row=r, column=c).fill = banner_fill
+
+    ws.merge_cells(start_row=1, start_column=2, end_row=1, end_column=max_col_idx)
+    ws.merge_cells(start_row=2, start_column=2, end_row=2, end_column=max_col_idx)
+
+    display_title = main_table.get("tableName") or data_sheet_name
+    b1 = ws.cell(row=1, column=2, value=f"Painel Executivo & Estatísticas — {display_title}")
+    b1.font = Font(name=FONT_NAME, size=15, bold=True, color=WHITE)
+    b1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+    exported_at = datetime.now().strftime("%d/%m/%Y %H:%M")
+    b2 = ws.cell(
+        row=2, column=2,
+        value=f"Exportado em {exported_at}  |  Base Analítica: {data_sheet_name}  |  Total: {total_records} registros consolidados",
     )
-    spill_cell = ws.cell(row=spill_row, column=type_col)
-    spill_cell.value = ArrayFormula(f"{TL}{spill_row}", spill_formula)
-    spill_cell.font = data_font
+    b2.font = Font(name=FONT_NAME, size=9.5, color=BANNER_SUBTITLE)
+    b2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
-    block_end = spill_row + unique_count - 1
-    for offset in range(unique_count):
-        r = spill_row + offset
-        ws.cell(row=r, column=type_col).font = data_font
-        qty = ws.cell(
-            row=r, column=qty_col,
-            value=f'=IF({TL}{r}="", "", SUMPRODUCT(({data_a}<>"") * ({data_g}={TL}{r}) * {visible}))',
-        )
-        qty.font = data_font
-        qty.alignment = Alignment(horizontal="center", vertical="center")
-        pct = ws.cell(
-            row=r, column=pct_col,
-            value=f'=IF(OR({TL}{r}="", {vis_total}=0), "", {QL}{r}/{vis_total})',
-        )
-        pct.font = Font(name=FONT_NAME, size=10, color=MUTED)
-        pct.number_format = "0.0%"
-        pct.alignment = Alignment(horizontal="center", vertical="center")
+    # 4. Cartoes de KPI Executivos (Linhas 4-5)
+    ws.row_dimensions[4].height = 28
+    ws.row_dimensions[5].height = 16
+    ws.row_dimensions[6].height = 14  # respiro
 
-    # 4. Barras de dados na coluna Qtd (cor tematica)
-    bar_rule = DataBarRule(start_type="num", start_value=0, end_type="max", color=bar_hex, showValue=True)
-    ws.conditional_formatting.add(f"{QL}{spill_row}:{QL}{block_end}", bar_rule)
+    card_side = Side(style="thin", color=card_bdr_color)
+    card_accent_left = Border(
+        left=Side(style="thick", color=accent_color),
+        top=card_side,
+        bottom=card_side,
+    )
 
-    # 5. Borda leve de cartao
-    for r in range(block_start, block_end + 1):
-        left = ws.cell(row=r, column=type_col)
-        right = ws.cell(row=r, column=pct_col)
-        left.border = Border(left=card_side, top=left.border.top,
-                             bottom=(card_side if r == block_end else left.border.bottom))
-        right.border = Border(right=card_side, top=right.border.top,
-                              bottom=(card_side if r == block_end else right.border.bottom))
+    def draw_kpi_card(c_start: int, c_end: int, val_expr, label: str, num_fmt: str | None = None):
+        for r in (4, 5):
+            for c in range(c_start, c_end + 1):
+                cell = ws.cell(row=r, column=c)
+                cell.fill = PatternFill("solid", fgColor=kpi_fill_color)
+                cell.border = Border(
+                    left=(card_accent_left.left if c == c_start else None),
+                    top=(card_side if r == 4 else None),
+                    bottom=(card_side if r == 5 else None),
+                    right=(card_side if c == c_end else None),
+                )
+        ws.merge_cells(start_row=4, start_column=c_start, end_row=4, end_column=c_end)
+        ws.merge_cells(start_row=5, start_column=c_start, end_row=5, end_column=c_end)
+
+        vc = ws.cell(row=4, column=c_start, value=val_expr)
+        vc.font = Font(name=FONT_NAME, size=18, bold=True, color=kpi_text_color)
+        vc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        if num_fmt:
+            vc.number_format = num_fmt
+
+        lc = ws.cell(row=5, column=c_start, value=label)
+        lc.font = Font(name=FONT_NAME, size=8.5, bold=True, color=MUTED)
+        lc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+    clean_sheet_name = data_sheet_name.replace("'", "''")
+    clean_sheet_ref = f"'{clean_sheet_name}'"
+    last_row = max(last_filter_row, DATA_START_ROW)
+    ref_col_a = f"{clean_sheet_ref}!$A${DATA_START_ROW}:$A${last_row}"
+
+    if has_resp:
+        draw_kpi_card(2, 5, f"=COUNTA({ref_col_a})", "TOTAL DE REGISTROS", "#,##0")
+        label_tipo = re.sub(r"\s*/.*$", "", headers[group_col]).strip().upper() if group_col is not None else "CATEGORIAS"
+        draw_kpi_card(7, 10, len(unique_tipos) if group_col is not None else len(headers), f"TIPOS DE {label_tipo[:18]}", "#,##0")
+        draw_kpi_card(12, 15, len(resp_list), "RESPONSÁVEIS IDENTIFICADOS", "#,##0")
+    else:
+        draw_kpi_card(2, 4, f"=COUNTA({ref_col_a})", "TOTAL DE REGISTROS", "#,##0")
+        label_tipo = re.sub(r"\s*/.*$", "", headers[group_col]).strip().upper() if group_col is not None else "CATEGORIAS"
+        draw_kpi_card(5, 7, len(unique_tipos) if group_col is not None else len(headers), f"TIPOS DE {label_tipo[:18]}", "#,##0")
+        if situacao_col is not None:
+            draw_kpi_card(8, 10, len(unique_sit), "SITUAÇÕES / STATUS", "#,##0")
+        else:
+            period = _compute_period(headers, parsed_rows) or "GERAL"
+            draw_kpi_card(8, 10, period, "PERÍODO REFERÊNCIA", None)
+
+    # 5. Tabelas de Distribuicao
+    START_TABLE_ROW = 7
+    HEADER_TABLE_ROW = 8
+    DATA_TABLE_ROW = 9
+
+    def write_block_header(c_start: int, c_end: int, title: str):
+        for c in range(c_start, c_end + 1):
+            cell = ws.cell(row=START_TABLE_ROW, column=c)
+            cell.fill = PatternFill("solid", fgColor=banner_color)
+        ws.merge_cells(start_row=START_TABLE_ROW, start_column=c_start, end_row=START_TABLE_ROW, end_column=c_end)
+        th = ws.cell(row=START_TABLE_ROW, column=c_start, value=title)
+        th.font = Font(name=FONT_NAME, size=11, bold=True, color=WHITE)
+        th.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+    def write_column_headers(cols: list[tuple[int, str, str]]):
+        for c_idx, label, align in cols:
+            cell = ws.cell(row=HEADER_TABLE_ROW, column=c_idx, value=label)
+            cell.fill = PatternFill("solid", fgColor=kpi_fill_color)
+            cell.font = Font(name=FONT_NAME, size=9.5, bold=True, color=kpi_text_color)
+            cell.border = Border(bottom=card_side)
+            cell.alignment = Alignment(horizontal=align, vertical="center", indent=(1 if align == "left" else 0))
+
+    ws.row_dimensions[START_TABLE_ROW].height = 24
+    ws.row_dimensions[HEADER_TABLE_ROW].height = 20
+
+    # --- Tabela 1: Tipo de Solicitacao ---
+    if group_col is not None and unique_tipos:
+        short_group = re.sub(r"\s*/.*$", "", headers[group_col]).strip()
+        write_block_header(2, 5, f"Contabilização por {short_group}")
+        write_column_headers([
+            (2, short_group, "left"),
+            (3, "Qtd", "center"),
+            (4, "% Total", "center"),
+            (5, "Representatividade", "center"),
+        ])
+
+        g_letter = get_column_letter(group_col + 1)
+        ref_g = f"{clean_sheet_ref}!${g_letter}${DATA_START_ROW}:${g_letter}${last_row}"
+
+        t1_total_row = DATA_TABLE_ROW + len(unique_tipos)
+        for idx, tipo_val in enumerate(unique_tipos):
+            curr_r = DATA_TABLE_ROW + idx
+            ws.row_dimensions[curr_r].height = 19
+            striped = (idx % 2 == 1)
+            row_fill = PatternFill("solid", fgColor=zebra_color) if striped else None
+
+            c_tipo = ws.cell(row=curr_r, column=2, value=tipo_val)
+            c_tipo.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_tipo.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c_tipo.border = Border(left=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_tipo.fill = row_fill
+
+            escaped_val = str(tipo_val).replace('"', '""')
+            c_qtd = ws.cell(
+                row=curr_r, column=3,
+                value=f'=COUNTIFS({ref_col_a}, "<>", {ref_g}, "{escaped_val}")',
+            )
+            c_qtd.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_qtd.alignment = Alignment(horizontal="center", vertical="center")
+            c_qtd.number_format = "#,##0"
+            c_qtd.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_qtd.fill = row_fill
+
+            c_pct = ws.cell(
+                row=curr_r, column=4,
+                value=f'=IF($C${t1_total_row}=0, 0, C{curr_r}/$C${t1_total_row})',
+            )
+            c_pct.font = Font(name=FONT_NAME, size=9.5, color=MUTED)
+            c_pct.alignment = Alignment(horizontal="center", vertical="center")
+            c_pct.number_format = "0.0%"
+            c_pct.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_pct.fill = row_fill
+
+            c_bar = ws.cell(row=curr_r, column=5, value=f'=C{curr_r}')
+            c_bar.font = Font(name=FONT_NAME, size=9, color=MUTED)
+            c_bar.alignment = Alignment(horizontal="right", vertical="center")
+            c_bar.number_format = "#,##0"
+            c_bar.border = Border(right=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_bar.fill = row_fill
+
+        ws.row_dimensions[t1_total_row].height = 22
+        t1_fill = PatternFill("solid", fgColor=group_fill_clr)
+        t1_top = Border(top=Side(style="thin", color=card_bdr_color), bottom=card_side)
+        for c in range(2, 6):
+            cell = ws.cell(row=t1_total_row, column=c)
+            cell.fill = t1_fill
+            cell.border = Border(
+                left=(card_side if c == 2 else None),
+                right=(card_side if c == 5 else None),
+                top=t1_top.top,
+                bottom=t1_top.bottom,
+            )
+
+        c_tot_lbl = ws.cell(row=t1_total_row, column=2, value="Total")
+        c_tot_lbl.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_lbl.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+        c_tot_val = ws.cell(row=t1_total_row, column=3, value=f"=SUM(C{DATA_TABLE_ROW}:C{t1_total_row - 1})")
+        c_tot_val.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_val.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_val.number_format = "#,##0"
+
+        c_tot_pct = ws.cell(row=t1_total_row, column=4, value=f"=SUM(D{DATA_TABLE_ROW}:D{t1_total_row - 1})")
+        c_tot_pct.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_pct.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_pct.number_format = "0.0%"
+
+        t1_bar_rule = DataBarRule(start_type="num", start_value=0, end_type="max", color=bar_hex, showValue=False)
+        ws.conditional_formatting.add(f"E{DATA_TABLE_ROW}:E{t1_total_row - 1}", t1_bar_rule)
+
+    # --- Tabela 2: Situacao ---
+    if situacao_col is not None and unique_sit:
+        short_sit = re.sub(r"\s*/.*$", "", headers[situacao_col]).strip()
+        write_block_header(7, 10, f"Contabilização por {short_sit}")
+        write_column_headers([
+            (7, short_sit, "left"),
+            (8, "Qtd", "center"),
+            (9, "% Total", "center"),
+            (10, "Representatividade", "center"),
+        ])
+
+        s_letter = get_column_letter(situacao_col + 1)
+        ref_s = f"{clean_sheet_ref}!${s_letter}${DATA_START_ROW}:${s_letter}${last_row}"
+
+        t2_total_row = DATA_TABLE_ROW + len(unique_sit)
+        for idx, sit_val in enumerate(unique_sit):
+            curr_r = DATA_TABLE_ROW + idx
+            ws.row_dimensions[curr_r].height = 19
+            striped = (idx % 2 == 1)
+            row_fill = PatternFill("solid", fgColor=zebra_color) if striped else None
+
+            c_sit = ws.cell(row=curr_r, column=7, value=sit_val)
+            c_sit.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_sit.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c_sit.border = Border(left=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_sit.fill = row_fill
+
+            escaped_val = str(sit_val).replace('"', '""')
+            c_qtd = ws.cell(
+                row=curr_r, column=8,
+                value=f'=COUNTIFS({ref_col_a}, "<>", {ref_s}, "{escaped_val}")',
+            )
+            c_qtd.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_qtd.alignment = Alignment(horizontal="center", vertical="center")
+            c_qtd.number_format = "#,##0"
+            c_qtd.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_qtd.fill = row_fill
+
+            c_pct = ws.cell(
+                row=curr_r, column=9,
+                value=f'=IF($H${t2_total_row}=0, 0, H{curr_r}/$H${t2_total_row})',
+            )
+            c_pct.font = Font(name=FONT_NAME, size=9.5, color=MUTED)
+            c_pct.alignment = Alignment(horizontal="center", vertical="center")
+            c_pct.number_format = "0.0%"
+            c_pct.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_pct.fill = row_fill
+
+            c_bar = ws.cell(row=curr_r, column=10, value=f'=H{curr_r}')
+            c_bar.font = Font(name=FONT_NAME, size=9, color=MUTED)
+            c_bar.alignment = Alignment(horizontal="right", vertical="center")
+            c_bar.number_format = "#,##0"
+            c_bar.border = Border(right=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_bar.fill = row_fill
+
+        ws.row_dimensions[t2_total_row].height = 22
+        t2_fill = PatternFill("solid", fgColor=group_fill_clr)
+        t2_top = Border(top=Side(style="thin", color=card_bdr_color), bottom=card_side)
+        for c in range(7, 11):
+            cell = ws.cell(row=t2_total_row, column=c)
+            cell.fill = t2_fill
+            cell.border = Border(
+                left=(card_side if c == 7 else None),
+                right=(card_side if c == 10 else None),
+                top=t2_top.top,
+                bottom=t2_top.bottom,
+            )
+
+        c_tot_lbl = ws.cell(row=t2_total_row, column=7, value="Total")
+        c_tot_lbl.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_lbl.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+        c_tot_val = ws.cell(row=t2_total_row, column=8, value=f"=SUM(H{DATA_TABLE_ROW}:H{t2_total_row - 1})")
+        c_tot_val.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_val.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_val.number_format = "#,##0"
+
+        c_tot_pct = ws.cell(row=t2_total_row, column=9, value=f"=SUM(I{DATA_TABLE_ROW}:I{t2_total_row - 1})")
+        c_tot_pct.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_pct.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_pct.number_format = "0.0%"
+
+        t2_bar_rule = DataBarRule(start_type="num", start_value=0, end_type="max", color=bar_hex, showValue=False)
+        ws.conditional_formatting.add(f"J{DATA_TABLE_ROW}:J{t2_total_row - 1}", t2_bar_rule)
+
+    # --- Tabela 3: Responsaveis ---
+    if has_resp and resp_list:
+        write_block_header(12, 15, "Distribuição por Responsável")
+        write_column_headers([
+            (12, "Responsável", "left"),
+            (13, "Processos", "center"),
+            (14, "% Total", "center"),
+            (15, "Representatividade", "center"),
+        ])
+
+        t3_total_row = DATA_TABLE_ROW + len(resp_list)
+        r_letter = get_column_letter(resp_col + 1) if resp_col is not None else None
+        ref_r = f"{clean_sheet_ref}!${r_letter}${DATA_START_ROW}:${r_letter}${last_row}" if r_letter else None
+
+        for idx, (person_name, cnt) in enumerate(resp_list):
+            curr_r = DATA_TABLE_ROW + idx
+            ws.row_dimensions[curr_r].height = 19
+            striped = (idx % 2 == 1)
+            row_fill = PatternFill("solid", fgColor=zebra_color) if striped else None
+
+            c_nom = ws.cell(row=curr_r, column=12, value=person_name)
+            c_nom.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_nom.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+            c_nom.border = Border(left=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_nom.fill = row_fill
+
+            if ref_r:
+                escaped_name = str(person_name).replace('"', '""')
+                val_expr = f'=COUNTIFS({ref_col_a}, "<>", {ref_r}, "*{escaped_name}*")'
+            else:
+                val_expr = cnt
+
+            c_qtd = ws.cell(row=curr_r, column=13, value=val_expr)
+            c_qtd.font = Font(name=FONT_NAME, size=10, color=INK)
+            c_qtd.alignment = Alignment(horizontal="center", vertical="center")
+            c_qtd.number_format = "#,##0"
+            c_qtd.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_qtd.fill = row_fill
+
+            c_pct = ws.cell(
+                row=curr_r, column=14,
+                value=f'=IF($M${t3_total_row}=0, 0, M{curr_r}/$M${t3_total_row})',
+            )
+            c_pct.font = Font(name=FONT_NAME, size=9.5, color=MUTED)
+            c_pct.alignment = Alignment(horizontal="center", vertical="center")
+            c_pct.number_format = "0.0%"
+            c_pct.border = Border(bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_pct.fill = row_fill
+
+            c_bar = ws.cell(row=curr_r, column=15, value=f'=M{curr_r}')
+            c_bar.font = Font(name=FONT_NAME, size=9, color=MUTED)
+            c_bar.alignment = Alignment(horizontal="right", vertical="center")
+            c_bar.number_format = "#,##0"
+            c_bar.border = Border(right=card_side, bottom=Side(style="thin", color=HAIRLINE))
+            if row_fill:
+                c_bar.fill = row_fill
+
+        ws.row_dimensions[t3_total_row].height = 22
+        t3_fill = PatternFill("solid", fgColor=group_fill_clr)
+        t3_top = Border(top=Side(style="thin", color=card_bdr_color), bottom=card_side)
+        for c in range(12, 16):
+            cell = ws.cell(row=t3_total_row, column=c)
+            cell.fill = t3_fill
+            cell.border = Border(
+                left=(card_side if c == 12 else None),
+                right=(card_side if c == 15 else None),
+                top=t3_top.top,
+                bottom=t3_top.bottom,
+            )
+
+        c_tot_lbl = ws.cell(row=t3_total_row, column=12, value="Total")
+        c_tot_lbl.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_lbl.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+
+        c_tot_val = ws.cell(row=t3_total_row, column=13, value=f"=SUM(M{DATA_TABLE_ROW}:M{t3_total_row - 1})")
+        c_tot_val.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_val.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_val.number_format = "#,##0"
+
+        c_tot_pct = ws.cell(row=t3_total_row, column=14, value=f"=SUM(N{DATA_TABLE_ROW}:N{t3_total_row - 1})")
+        c_tot_pct.font = Font(name=FONT_NAME, size=10, bold=True, color=kpi_text_color)
+        c_tot_pct.alignment = Alignment(horizontal="center", vertical="center")
+        c_tot_pct.number_format = "0.0%"
+
+        t3_bar_rule = DataBarRule(start_type="num", start_value=0, end_type="max", color=bar_hex, showValue=False)
+        ws.conditional_formatting.add(f"O{DATA_TABLE_ROW}:O{t3_total_row - 1}", t3_bar_rule)
 
 
 def _write_model_sheet(ws, table: dict, sheet_title: str, tab_color: str | None = None) -> int:  # noqa: C901
@@ -710,31 +1082,9 @@ def _write_model_sheet(ws, table: dict, sheet_title: str, tab_color: str | None 
     )
     _write_kpi_strip(ws, dynamic_kpis, n_cols, theme)
 
-    # --- Paineis de contabilizacao dinamica (cartoes de dashboard) ---
-    # Sempre visiveis: mostram a distribuicao completa e recalculam ao filtrar.
-    if group_col is not None and parsed_rows:
-        block_start = grand_total_row + 3
-        _write_dynamic_panel(
-            ws, group_col=group_col, start_col=1, block_start=block_start,
-            first_data_row=DATA_START_ROW, last_filter_row=last_filter_row,
-            unique_count=len({str(r[group_col]) for r in parsed_rows}),
-            header_short=re.sub(r"\s*/.*$", "", headers[group_col]).strip(),
-            data_font=data_font, theme=theme,
-        )
-
-        # Segundo painel por "Situacao", lado a lado (colunas F:I), se existir
-        # uma coluna de situacao distinta da coluna de grupo e houver espaco.
-        situacao_col = next(
-            (i for i, h in enumerate(headers) if "situa" in h.lower() and i != group_col), None
-        )
-        if situacao_col is not None and n_cols >= 9:
-            _write_dynamic_panel(
-                ws, group_col=situacao_col, start_col=6, block_start=block_start,
-                first_data_row=DATA_START_ROW, last_filter_row=last_filter_row,
-                unique_count=len({str(r[situacao_col]) for r in parsed_rows}),
-                header_short=re.sub(r"\s*/.*$", "", headers[situacao_col]).strip(),
-                data_font=data_font, theme=theme,
-            )
+    # Registra metadados para vinculo com a aba executiva Dashboards
+    table["_last_filter_row"] = last_filter_row
+    table["_data_sheet_name"] = ws.title
 
     return len(parsed_rows)
 
@@ -784,7 +1134,7 @@ def build_workbook(
     wb = Workbook()
     wb.remove(wb.active)
 
-    used_tab_names: set[str] = set()
+    used_tab_names: set[str] = {"dashboards"}
 
     # Passagem 1: mescla tabelas e reserva os nomes de aba na ordem, para que
     # a aba principal conheca os nomes das abas de responsaveis antes de montar.
@@ -808,11 +1158,18 @@ def build_workbook(
 
     # Mapa processo -> responsaveis (abas secundarias que contem o processo)
     proc_to_persons: dict[str, list[str]] = {}
+    secondary_person_counts: dict[str, int] = {}
     for p in prepared[1:]:
         if not p["ordered"]:
             continue
         person = p["names"][0]
-        for key in {_proc_key(row[0]) for row in p["ordered"][0].get("rows", []) if row and _proc_key(row[0])}:
+        person_procs = {
+            _proc_key(row[0])
+            for row in p["ordered"][0].get("rows", [])
+            if row and _proc_key(row[0])
+        }
+        secondary_person_counts[person] = len(person_procs)
+        for key in person_procs:
             proc_to_persons.setdefault(key, []).append(person)
 
     # Injeta "Responsavel" na tabela principal, se houver responsaveis com dados e a aba principal nao estiver desabilitada
@@ -825,6 +1182,13 @@ def build_workbook(
     # Passagem 2: monta as abas
     summary = []
     tab_index = 0
+
+    # Cria a aba executiva Dashboards como primeira aba se houver dados
+    has_any_data = any(p["ordered"] for p in prepared)
+    ws_dash = None
+    if has_any_data:
+        ws_dash = wb.create_sheet(title="Dashboards")
+
     for file_idx, p in enumerate(prepared):
         result, names, ordered = p["result"], p["names"], p["ordered"]
         # Arquivos secundarios (indice > 0) podem ter suas abas ocultadas.
@@ -857,6 +1221,24 @@ def build_workbook(
                 "warning": result.get("warning"),
             }
         )
+
+    # Preenche a aba Dashboards apos montagem das abas de dados
+    if ws_dash is not None:
+        main_p = prepared[0] if (prepared and prepared[0]["ordered"]) else next((p for p in prepared if p["ordered"]), None)
+        if main_p and main_p["ordered"]:
+            main_table = main_p["ordered"][0]
+            data_sheet_name = main_table.get("_data_sheet_name", main_p["names"][0])
+            last_filter_row = main_table.get("_last_filter_row", HEADER_ROW + len(main_table.get("rows") or []))
+            _write_dashboard_sheet(
+                ws_dash,
+                main_table=main_table,
+                data_sheet_name=data_sheet_name,
+                last_filter_row=last_filter_row,
+                proc_to_persons=proc_to_persons,
+                secondary_person_counts=secondary_person_counts,
+                tab_color=TAB_PALETTE[0],
+            )
+            wb.active = ws_dash
 
     buffer = io.BytesIO()
     wb.save(buffer)

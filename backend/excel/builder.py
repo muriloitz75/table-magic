@@ -486,10 +486,27 @@ def _write_dashboard_sheet(
     b1.font = Font(name=FONT_NAME, size=15, bold=True, color=WHITE)
     b1.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
+    clean_sheet_name = data_sheet_name.replace("'", "''")
+    clean_sheet_ref = f"'{clean_sheet_name}'"
+    last_row = max(last_filter_row, DATA_START_ROW)
+    ref_col_a = f"{clean_sheet_ref}!$A${DATA_START_ROW}:$A${last_row}"
+    base_cell_a = f"{clean_sheet_ref}!$A${DATA_START_ROW}"
+    visible = f"SUBTOTAL(3, OFFSET({base_cell_a}, ROW({ref_col_a})-ROW({base_cell_a}), 0, 1))"
+    vis_total = f"SUBTOTAL(3, {ref_col_a})"
+
+    g_letter = get_column_letter(group_col + 1) if group_col is not None else None
+    ref_g = f"{clean_sheet_ref}!${g_letter}${DATA_START_ROW}:${g_letter}${last_row}" if g_letter else None
+
+    s_letter = get_column_letter(situacao_col + 1) if situacao_col is not None else None
+    ref_s = f"{clean_sheet_ref}!${s_letter}${DATA_START_ROW}:${s_letter}${last_row}" if s_letter else None
+
+    r_letter = get_column_letter(resp_col + 1) if resp_col is not None else None
+    ref_r = f"{clean_sheet_ref}!${r_letter}${DATA_START_ROW}:${r_letter}${last_row}" if r_letter else None
+
     exported_at = datetime.now().strftime("%d/%m/%Y %H:%M")
     b2 = ws.cell(
         row=2, column=2,
-        value=f"Exportado em {exported_at}  |  Base Analítica: {data_sheet_name}  |  Total: {total_records} registros consolidados",
+        value=f'="Exportado em {exported_at}  |  Base Analítica: {data_sheet_name}  |  " & TEXT({vis_total}, "#,##0") & " registros"',
     )
     b2.font = Font(name=FONT_NAME, size=9.5, color=BANNER_SUBTITLE)
     b2.alignment = Alignment(horizontal="left", vertical="center", indent=1)
@@ -530,22 +547,26 @@ def _write_dashboard_sheet(
         lc.font = Font(name=FONT_NAME, size=8.5, bold=True, color=MUTED)
         lc.alignment = Alignment(horizontal="left", vertical="center", indent=1)
 
-    clean_sheet_name = data_sheet_name.replace("'", "''")
-    clean_sheet_ref = f"'{clean_sheet_name}'"
-    last_row = max(last_filter_row, DATA_START_ROW)
-    ref_col_a = f"{clean_sheet_ref}!$A${DATA_START_ROW}:$A${last_row}"
-
     if has_resp:
-        draw_kpi_card(2, 5, f"=COUNTA({ref_col_a})", "TOTAL DE REGISTROS", "#,##0")
+        draw_kpi_card(2, 5, f"={vis_total}", "REGISTROS", "#,##0")
         label_tipo = re.sub(r"\s*/.*$", "", headers[group_col]).strip().upper() if group_col is not None else "CATEGORIAS"
-        draw_kpi_card(7, 10, len(unique_tipos) if group_col is not None else len(headers), f"TIPOS DE {label_tipo[:18]}", "#,##0")
+        if ref_g:
+            grp_kpi_val = f'=IFERROR(ROWS(_xlfn.UNIQUE(_xlfn._xlws.FILTER({ref_g}, ({ref_col_a}<>"") * {visible}))), 0)'
+        else:
+            grp_kpi_val = len(unique_tipos)
+        draw_kpi_card(7, 10, grp_kpi_val, f"TIPOS DE {label_tipo[:18]}", "#,##0")
         draw_kpi_card(12, 15, len(resp_list), "RESPONSÁVEIS IDENTIFICADOS", "#,##0")
     else:
-        draw_kpi_card(2, 4, f"=COUNTA({ref_col_a})", "TOTAL DE REGISTROS", "#,##0")
+        draw_kpi_card(2, 4, f"={vis_total}", "REGISTROS", "#,##0")
         label_tipo = re.sub(r"\s*/.*$", "", headers[group_col]).strip().upper() if group_col is not None else "CATEGORIAS"
-        draw_kpi_card(5, 7, len(unique_tipos) if group_col is not None else len(headers), f"TIPOS DE {label_tipo[:18]}", "#,##0")
-        if situacao_col is not None:
-            draw_kpi_card(8, 10, len(unique_sit), "SITUAÇÕES / STATUS", "#,##0")
+        if ref_g:
+            grp_kpi_val = f'=IFERROR(ROWS(_xlfn.UNIQUE(_xlfn._xlws.FILTER({ref_g}, ({ref_col_a}<>"") * {visible}))), 0)'
+        else:
+            grp_kpi_val = len(unique_tipos)
+        draw_kpi_card(5, 7, grp_kpi_val, f"TIPOS DE {label_tipo[:18]}", "#,##0")
+        if ref_s:
+            sit_kpi_val = f'=IFERROR(ROWS(_xlfn.UNIQUE(_xlfn._xlws.FILTER({ref_s}, ({ref_col_a}<>"") * {visible}))), 0)'
+            draw_kpi_card(8, 10, sit_kpi_val, "SITUAÇÕES / STATUS", "#,##0")
         else:
             period = _compute_period(headers, parsed_rows) or "GERAL"
             draw_kpi_card(8, 10, period, "PERÍODO REFERÊNCIA", None)
@@ -576,7 +597,7 @@ def _write_dashboard_sheet(
     ws.row_dimensions[HEADER_TABLE_ROW].height = 20
 
     # --- Tabela 1: Tipo de Solicitacao ---
-    if group_col is not None and unique_tipos:
+    if group_col is not None and unique_tipos and ref_g:
         short_group = re.sub(r"\s*/.*$", "", headers[group_col]).strip()
         write_block_header(2, 5, f"Contabilização por {short_group}")
         write_column_headers([
@@ -585,9 +606,6 @@ def _write_dashboard_sheet(
             (4, "% Total", "center"),
             (5, "Representatividade", "center"),
         ])
-
-        g_letter = get_column_letter(group_col + 1)
-        ref_g = f"{clean_sheet_ref}!${g_letter}${DATA_START_ROW}:${g_letter}${last_row}"
 
         t1_total_row = DATA_TABLE_ROW + len(unique_tipos)
         for idx, tipo_val in enumerate(unique_tipos):
@@ -603,10 +621,10 @@ def _write_dashboard_sheet(
             if row_fill:
                 c_tipo.fill = row_fill
 
-            escaped_val = str(tipo_val).replace('"', '""')
+            # Formula dinamica que recalcula com o autofiltro da aba de dados
             c_qtd = ws.cell(
                 row=curr_r, column=3,
-                value=f'=COUNTIFS({ref_col_a}, "<>", {ref_g}, "{escaped_val}")',
+                value=f'=SUMPRODUCT(({ref_col_a}<>"") * ({ref_g}=B{curr_r}) * {visible})',
             )
             c_qtd.font = Font(name=FONT_NAME, size=10, color=INK)
             c_qtd.alignment = Alignment(horizontal="center", vertical="center")
@@ -665,7 +683,7 @@ def _write_dashboard_sheet(
         ws.conditional_formatting.add(f"E{DATA_TABLE_ROW}:E{t1_total_row - 1}", t1_bar_rule)
 
     # --- Tabela 2: Situacao ---
-    if situacao_col is not None and unique_sit:
+    if situacao_col is not None and unique_sit and ref_s:
         short_sit = re.sub(r"\s*/.*$", "", headers[situacao_col]).strip()
         write_block_header(7, 10, f"Contabilização por {short_sit}")
         write_column_headers([
@@ -674,9 +692,6 @@ def _write_dashboard_sheet(
             (9, "% Total", "center"),
             (10, "Representatividade", "center"),
         ])
-
-        s_letter = get_column_letter(situacao_col + 1)
-        ref_s = f"{clean_sheet_ref}!${s_letter}${DATA_START_ROW}:${s_letter}${last_row}"
 
         t2_total_row = DATA_TABLE_ROW + len(unique_sit)
         for idx, sit_val in enumerate(unique_sit):
@@ -692,10 +707,10 @@ def _write_dashboard_sheet(
             if row_fill:
                 c_sit.fill = row_fill
 
-            escaped_val = str(sit_val).replace('"', '""')
+            # Formula dinamica que recalcula com o autofiltro da aba de dados
             c_qtd = ws.cell(
                 row=curr_r, column=8,
-                value=f'=COUNTIFS({ref_col_a}, "<>", {ref_s}, "{escaped_val}")',
+                value=f'=SUMPRODUCT(({ref_col_a}<>"") * ({ref_s}=G{curr_r}) * {visible})',
             )
             c_qtd.font = Font(name=FONT_NAME, size=10, color=INK)
             c_qtd.alignment = Alignment(horizontal="center", vertical="center")
@@ -764,8 +779,6 @@ def _write_dashboard_sheet(
         ])
 
         t3_total_row = DATA_TABLE_ROW + len(resp_list)
-        r_letter = get_column_letter(resp_col + 1) if resp_col is not None else None
-        ref_r = f"{clean_sheet_ref}!${r_letter}${DATA_START_ROW}:${r_letter}${last_row}" if r_letter else None
 
         for idx, (person_name, cnt) in enumerate(resp_list):
             curr_r = DATA_TABLE_ROW + idx
@@ -781,8 +794,7 @@ def _write_dashboard_sheet(
                 c_nom.fill = row_fill
 
             if ref_r:
-                escaped_name = str(person_name).replace('"', '""')
-                val_expr = f'=COUNTIFS({ref_col_a}, "<>", {ref_r}, "*{escaped_name}*")'
+                val_expr = f'=SUMPRODUCT(({ref_col_a}<>"") * ISNUMBER(SEARCH(L{curr_r}, {ref_r})) * {visible})'
             else:
                 val_expr = cnt
 

@@ -100,6 +100,20 @@ class TestExcelBuilder(unittest.TestCase):
         self.assertIn("RESPONSÁVE", all_text.upper())
         self.assertIn("João Silva", all_text)
 
+    def test_dashboard_formulas_bound_to_autofilter(self):
+        xlsx_bytes, summary = build_workbook(self.sample_file_results)
+        wb = openpyxl.load_workbook(io.BytesIO(xlsx_bytes))
+        ws = wb["Dashboards"]
+
+        # KPI 1 deve usar SUBTOTAL(3, ...) para reagir ao autofiltro da aba de dados
+        kpi1_formula = str(ws.cell(row=4, column=2).value)
+        self.assertTrue(kpi1_formula.startswith("=SUBTOTAL(3,"))
+
+        # Tabela 1 deve usar SUMPRODUCT com OFFSET/SUBTOTAL para contagem sensivel ao filtro
+        qtd_formula = str(ws.cell(row=9, column=3).value)
+        self.assertIn("SUMPRODUCT", qtd_formula)
+        self.assertIn("SUBTOTAL(3, OFFSET", qtd_formula)
+
 
 if __name__ == "__main__":
     unittest.main()

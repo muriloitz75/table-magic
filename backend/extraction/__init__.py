@@ -24,20 +24,26 @@ def extract_tables(pdf_bytes: bytes) -> dict:
     methods_used: set[str] = set()
     warning: str | None = None
 
-    for page in pages:
-        if page.kind == "digital":
-            found = extract_digital_tables(pdf_bytes, [page.index])
+    i = 0
+    while i < len(pages):
+        if pages[i].kind == "digital":
+            batch_indices: list[int] = []
+            while i < len(pages) and pages[i].kind == "digital":
+                batch_indices.append(pages[i].index)
+                i += 1
+            found = extract_digital_tables(pdf_bytes, batch_indices)
             if found:
                 tables.extend(found)
                 methods_used.add("digital")
         else:
             try:
-                found = extract_ocr_tables(pdf_bytes, [page.index])
+                found = extract_ocr_tables(pdf_bytes, [pages[i].index])
                 if found:
                     tables.extend(found)
                     methods_used.add("ocr")
             except TesseractUnavailableError as exc:
                 warning = str(exc)
+            i += 1
 
     if not methods_used:
         method = "none"

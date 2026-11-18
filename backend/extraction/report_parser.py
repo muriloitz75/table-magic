@@ -16,11 +16,10 @@ O parser espelha o modelo (modelo/Setor21_20260720.xlsx):
   - ordena por "Tipo de Solicitacao" para o agrupamento/subtotais do builder
 """
 
-import io
 import re
 from collections import defaultdict
 
-import pdfplumber
+import fitz  # PyMuPDF
 
 # Assinatura do cabecalho (tokens que identificam este relatorio)
 HEADER_SIGNATURE = ("Proc.", "Contribuinte", "Abertura", "Solicita", "Situa")
@@ -96,17 +95,31 @@ def _split_glued_words(words: list[dict]) -> list[dict]:
     return out
 
 
+def _extract_page_words(page: fitz.Page) -> list[dict]:
+    """Extrai palavras da pagina no sistema de coordenadas visuais (considerando rotacao)."""
+    raw_words = page.get_text("words")
+    rot = page.rotation
+    if rot == 0:
+        return [
+            {"x0": w[0], "top": w[1], "x1": w[2], "text": w[4]}
+            for w in raw_words
+        ]
+
+    matrix = page.rotation_matrix
+    out = []
+    for w in raw_words:
+        r = fitz.Rect(w[0], w[1], w[2], w[3]) * matrix
+        out.append({"x0": r.x0, "top": r.y0, "x1": r.x1, "text": w[4]})
+    return out
+
+
 def _cluster_rows(words: list[dict], tol: float = 4.0) -> list[list[dict]]:
     """Agrupa palavras em linhas visuais por proximidade de `top`."""
     rows: list[tuple[float, list[dict]]] = []
     for w in sorted(words, key=lambda k: (k["top"], k["x0"])):
-        placed = False
-        for i, (top, bucket) in enumerate(rows):
-            if abs(w["top"] - top) <= tol:
-                bucket.append(w)
-                placed = True
-                break
-        if not placed:
+        if rows and abs(w["top"] - rows[-1][0]) <= tol:
+            rows[-1][1].append(w)
+        else:
             rows.append((w["top"], [w]))
     return [sorted(bucket, key=lambda k: k["x0"]) for _, bucket in rows]
 
@@ -165,18 +178,20 @@ def _finalize_record(cols: dict[int, list[str]]) -> list[str] | None:
 def parse_report(pdf_bytes: bytes) -> dict | None:
     """Retorna {tableName, headers, rows} se o PDF for o Relatorio Sintetico de
     Processos; caso contrario None (para o orchestrator cair na extracao generica)."""
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        if not pdf.pages:
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        if doc.page_count == 0:
             return None
-        first_words = pdf.pages[0].extract_words()
+        first_words = _extract_page_words(doc[0])
         if not _is_report(first_words):
             return None
 
         records: list[list[str]] = []
 
-        for page in pdf.pages:
-            words = page.extract_words()
-            bounds = _column_boundaries(page.width)
+        for page in doc:
+            words = _extract_page_words(page)
+            page_width = page.rect.width
+            bounds = _column_boundaries(page_width)
             rows = _cluster_rows(_split_glued_words(words))
 
             current: dict[int, list[str]] | None = None
@@ -191,7 +206,7 @@ def parse_report(pdf_bytes: bytes) -> dict | None:
                     continue
 
                 first = row[0]
-                scale = page.width / TEMPLATE_WIDTH
+                scale = page_width / TEMPLATE_WIDTH
                 is_new = bool(PROC_RE.match(first["text"])) and first["x0"] < CONTRIB_START * scale
 
                 if is_new:
@@ -214,6 +229,8 @@ def parse_report(pdf_bytes: bytes) -> dict | None:
                 if rec:
                     records.append(rec)
                 current = None
+    finally:
+        doc.close()
 
     if not records:
         return None

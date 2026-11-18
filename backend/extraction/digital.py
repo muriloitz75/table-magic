@@ -48,31 +48,38 @@ def _extract_with_pdfplumber(page) -> list[dict]:
     return results
 
 
-def _extract_with_pymupdf(pdf_bytes: bytes, page_index: int) -> list[dict]:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    try:
-        page = doc[page_index]
-        finder = page.find_tables()
-        results = []
-        for table in finder.tables:
-            normalized = _normalize_raw_table(table.extract())
-            if normalized:
-                results.append(normalized)
-        return results
-    finally:
-        doc.close()
+def _extract_with_pymupdf(doc: fitz.Document, page_index: int) -> list[dict]:
+    page = doc[page_index]
+    finder = page.find_tables()
+    results = []
+    for table in finder.tables:
+        normalized = _normalize_raw_table(table.extract())
+        if normalized:
+            results.append(normalized)
+    return results
 
 
 def extract_digital_tables(pdf_bytes: bytes, page_indices: list[int]) -> list[dict]:
     """Extrai tabelas das paginas indicadas (indices 0-based) de um PDF digital."""
     tables: list[dict] = []
-    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-        for idx in page_indices:
-            if idx >= len(pdf.pages):
-                continue
-            page = pdf.pages[idx]
-            found = _extract_with_pdfplumber(page)
-            if not found:
-                found = _extract_with_pymupdf(pdf_bytes, idx)
-            tables.extend(found)
+    fitz_doc: fitz.Document | None = None
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for idx in page_indices:
+                if idx >= len(pdf.pages):
+                    continue
+                page = pdf.pages[idx]
+                try:
+                    found = _extract_with_pdfplumber(page)
+                    if not found:
+                        if fitz_doc is None:
+                            fitz_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                        found = _extract_with_pymupdf(fitz_doc, idx)
+                    tables.extend(found)
+                finally:
+                    # Libera cache interno do pdfminer/pdfplumber para evitar OOM em PDFs com centenas de paginas.
+                    page.flush_cache()
+    finally:
+        if fitz_doc is not None:
+            fitz_doc.close()
     return tables

@@ -298,8 +298,21 @@ export default function App() {
       clearInterval(stepInterval);
 
       if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || "Ocorreu um erro no servidor durante a conversão.");
+        const rawError = await response.text();
+        let errMessage = "";
+        try {
+          const errData = JSON.parse(rawError);
+          errMessage =
+            errData?.error ||
+            errData?.message ||
+            (typeof errData?.detail === "string" ? errData.detail : "");
+        } catch {
+          // Resposta nao-JSON (ex.: proxy 502/504 em HTML)
+        }
+        throw new Error(
+          errMessage ||
+            `Ocorreu um erro no servidor durante a conversão (HTTP ${response.status}).`
+        );
       }
 
       const data = await response.json();

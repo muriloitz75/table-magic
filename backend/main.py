@@ -1,8 +1,10 @@
 import base64
+import logging
 import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -10,6 +12,7 @@ from .excel.builder import build_workbook
 from .extraction import extract_tables
 from .models import ConvertRequest, ConvertResponse, FileSummary
 
+logger = logging.getLogger(__name__)
 app = FastAPI(title="Table Magic")
 
 
@@ -18,8 +21,17 @@ async def http_exception_handler(request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"error": "Dados de entrada invalidos na requisicao de conversao."},
+    )
+
+
 @app.exception_handler(Exception)
 async def generic_exception_handler(request, exc: Exception):
+    logger.exception("Erro inesperado durante a conversao")
     return JSONResponse(status_code=500, content={"error": str(exc) or "Erro desconhecido durante a conversao."})
 
 
